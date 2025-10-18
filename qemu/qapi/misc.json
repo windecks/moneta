@@ -3051,3 +3051,30 @@
   'data': 'NumaOptions',
   'allow-preconfig': true
 }
+
+##
+# @MonetaVfioInjectMode:
+#
+# An enumeration of VFIO injection modes.
+#
+# @off:    Injection is disabled (perform regular read).
+# @random: Inject a pseudo-random 64-bit value (seeded with 42).
+# @user:   Inject a specific 64-bit value provided by 'value' argument.
+##
+{ 'enum': 'MonetaVfioInjectMode',
+'data': ['off', 'random', 'user'] }
+
+##
+# @moneta-vfio-inject:
+#
+# Control the Moneta VFIO injection mechanism.
+#
+# @mode: The injection mode to set.
+#
+# @value: The 64-bit value to inject. This is only used
+#         if @mode is 'user'. (optional)
+##
+{ 'command': 'moneta-vfio-inject',
+'data': { 'mode': 'MonetaVfioInjectMode', '*value': 'uint64' } }
+
+

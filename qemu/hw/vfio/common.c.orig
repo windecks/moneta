@@ -40,82 +40,6 @@
 #include "sysemu/kvm.h"
 #include "trace.h"
 #include "qapi/error.h"
-#include "hw/vfio/moneta-inject.h"
-
-#include <time.h>
-
-#include "hw/vfio/moneta-trace.h"
-
-MonetaVfioInjectMode moneta_vfio_inject_mode = MONETA_VFIO_INJECT_MODE_OFF;
-uint64_t moneta_vfio_inject_value = 0;
-
-static bool moneta_vfio_trace_enabled_flag = true;
-static FILE *moneta_vfio_trace_log;
-
-void moneta_vfio_trace_set(bool enable)
-{
-    if (enable && !moneta_vfio_trace_enabled_flag) {
-        moneta_vfio_trace_enabled_flag = true;
-    } else if (!enable && moneta_vfio_trace_enabled_flag) {
-        if (moneta_vfio_trace_log && moneta_vfio_trace_log != stderr) {
-            fclose(moneta_vfio_trace_log);
-        }
-        moneta_vfio_trace_log = NULL;
-        moneta_vfio_trace_enabled_flag = false;
-    }
-}
-
-bool moneta_vfio_trace_enabled(void)
-{
-    return moneta_vfio_trace_enabled_flag;
-}
-
-static inline void moneta_vfio_log(const char *dev, int region,
-                                   hwaddr addr, unsigned size,
-                                   bool is_read, uint64_t value)
-{
-    if (!moneta_vfio_trace_enabled_flag) {
-        return;
-    }
-    if (!moneta_vfio_trace_log) {
-        moneta_vfio_trace_log = fopen("/tmp/moneta-vfio.log", "a");
-        if (!moneta_vfio_trace_log) {
-            moneta_vfio_trace_log = stderr;
-        }
-    }
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    fprintf(moneta_vfio_trace_log,
-            "[moneta-vfio] %lld.%09ld dev=%s region=%d %s addr=0x%"HWADDR_PRIx" size=%u value=0x%"PRIx64"\n",
-            (long long)ts.tv_sec, ts.tv_nsec,
-            dev, region, is_read ? "read" : "write",
-            addr, size, value);
-    fflush(moneta_vfio_trace_log);
-}
-
-static inline void moneta_vfio_log_string(const char *message)
-{
-    if (!moneta_vfio_trace_enabled_flag) {
-        return;
-    }
-    if (!moneta_vfio_trace_log) {
-        moneta_vfio_trace_log = fopen("/tmp/moneta-vfio.log", "a");
-        if (!moneta_vfio_trace_log) {
-            moneta_vfio_trace_log = stderr;
-        }
-    }
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-
-    fprintf(moneta_vfio_trace_log,
-            "[moneta-vfio] %lld.%09ld %s\n",
-            (long long)ts.tv_sec, ts.tv_nsec,
-            message);
-    fflush(moneta_vfio_trace_log);
-}
 
 VFIOGroupList vfio_group_list =
     QLIST_HEAD_INITIALIZER(vfio_group_list);
@@ -216,7 +140,6 @@ void vfio_region_write(void *opaque, hwaddr addr,
     }
 
     trace_vfio_region_write(vbasedev->name, region->nr, addr, data, size);
-    moneta_vfio_log(vbasedev->name, region->nr, addr, size, false, data);
 
     /*
      * A read or write to a BAR always signals an INTx EOI.  This will
@@ -242,42 +165,26 @@ uint64_t vfio_region_read(void *opaque,
     } buf;
     uint64_t data = 0;
 
-    switch (moneta_vfio_inject_mode) {
+    char* rand_inject_enabled = getenv("VFIO_INJECT_READ_RAND");
+    if (rand_inject_enabled && strcmp(rand_inject_enabled, "1") == 0) {
+        srand(42);
+        data = (uint64_t)rand();
+        data = (data << 32) | (uint64_t)rand();
 
-        case MONETA_VFIO_INJECT_MODE_RANDOM:
-        {
-            // Seed the generator ONCE with 42, as in your logic
-            srand(42);
-            moneta_vfio_log_string("Injecting random value");
-            data = (uint64_t)rand();
-            data = (data << 32) | (uint64_t)rand();
+        trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
+        vbasedev->ops->vfio_eoi(vbasedev);
 
-            trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
-            vbasedev->ops->vfio_eoi(vbasedev);
-
-            return data;
-        }
-
-        case MONETA_VFIO_INJECT_MODE_USER:
-        {
-            // Get the value from our global variable
-            data = moneta_vfio_inject_value;
-
-            char log_buf[128];
-            snprintf(log_buf, sizeof(log_buf),
-                     "Injecting user value: 0x%"PRIx64, data);
-            moneta_vfio_log_string(log_buf);
-
-            trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
-            vbasedev->ops->vfio_eoi(vbasedev);
-
-            return data;
-        }
-
-        case MONETA_VFIO_INJECT_MODE_OFF:
-        default:
-            break;
+        return data;
     }
+
+    char* user_inject_var = getenv("VFIO_INJECT_READ_USER");
+    if (user_inject_var) {
+        data = (uint64_t)strtoull(user_inject_var, NULL, 0);
+        trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
+        vbasedev->ops->vfio_eoi(vbasedev);
+        return data;
+    }
+
     if (pread(vbasedev->fd, &buf, size, region->fd_offset + addr) != size) {
         error_report("%s(%s:region%d+0x%"HWADDR_PRIx", %d) failed: %m",
                      __func__, vbasedev->name, region->nr,
@@ -303,7 +210,6 @@ uint64_t vfio_region_read(void *opaque,
     }
 
     trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
-    moneta_vfio_log(vbasedev->name, region->nr, addr, size, true, data);
 
     /* Same as write above */
     vbasedev->ops->vfio_eoi(vbasedev);

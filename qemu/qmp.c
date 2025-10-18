@@ -44,6 +44,7 @@
 #include "hw/acpi/acpi_dev_interface.h"
 #include "hw/pci/pci.h"
 #include "hw/periscope/kcov_vdev.h"
+#include "hw/vfio/moneta-inject.h"
 
 NameInfo *qmp_query_name(Error **errp)
 {
@@ -744,4 +745,21 @@ void qmp_kcov_ioctl(int64_t cmd, int64_t arg, Error **errp)
       kcov_ioctl(p, cmd, arg);
    else
       printf("Error no device kcov_vdev\n");
+}
+
+void qmp_moneta_vfio_inject(MonetaVfioInjectMode mode,
+                            bool has_value, uint64_t value,
+                            Error **errp)
+{
+    // If the user set mode to 'user' but did not provide a value,
+    // it's an error.
+    if (mode == MONETA_VFIO_INJECT_MODE_USER && !has_value) {
+        error_setg(errp, "The 'value' argument is required when mode is 'user'");
+        return;
+    }
+
+    moneta_vfio_inject_mode = mode;
+    if (has_value) {
+        moneta_vfio_inject_value = value;
+    }
 }
