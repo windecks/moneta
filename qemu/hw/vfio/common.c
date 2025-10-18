@@ -18,6 +18,11 @@
  *  Copyright (C) 2008, IBM, Muli Ben-Yehuda (muli@il.ibm.com)
  */
 
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+
 #include "qemu/osdep.h"
 #include <sys/ioctl.h>
 #ifdef CONFIG_KVM
@@ -160,6 +165,24 @@ uint64_t vfio_region_read(void *opaque,
         uint64_t qword;
     } buf;
     uint64_t data = 0;
+
+    char* rand_inject_enabled = getenv("VFIO_INJECT_READ_RAND");
+    if (rand_inject_enabled && strcmp(rand_inject_enabled, "1") == 0) {
+        srand(42);
+        data = (uint64_t)rand();
+        data = (data << 32) | (uint64_t)rand();
+
+        trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
+        vbasedev->ops->vfio_eoi(vbasedev);
+
+        return data;
+    }
+
+    char* user_inject_var = getenv("VFIO_INJECT_READ_USER");
+    if (user_inject_var) {
+        data = (uint64_t)strtoull(user_inject_var, NULL, 0);
+
+    }
 
     if (pread(vbasedev->fd, &buf, size, region->fd_offset + addr) != size) {
         error_report("%s(%s:region%d+0x%"HWADDR_PRIx", %d) failed: %m",
