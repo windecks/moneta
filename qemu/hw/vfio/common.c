@@ -181,7 +181,9 @@ uint64_t vfio_region_read(void *opaque,
     char* user_inject_var = getenv("VFIO_INJECT_READ_USER");
     if (user_inject_var) {
         data = (uint64_t)strtoull(user_inject_var, NULL, 0);
-
+        trace_vfio_region_read(vbasedev->name, region->nr, addr, size, data);
+        vbasedev->ops->vfio_eoi(vbasedev);
+        return data;
     }
 
     if (pread(vbasedev->fd, &buf, size, region->fd_offset + addr) != size) {
